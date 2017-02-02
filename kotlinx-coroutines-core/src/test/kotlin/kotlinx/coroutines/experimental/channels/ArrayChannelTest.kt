@@ -6,38 +6,40 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
-class RendezvousChannelTest : TestBase() {
+class ArrayChannelTest : TestBase() {
     @Test
     fun testSimple() = runBlocking {
-        val q = RendezvousChannel<Int>()
-        check(q.isEmpty && q.isFull)
+        val q = ArrayChannel<Int>(1)
+        check(q.isEmpty && !q.isFull)
         expect(1)
         val sender = launch(context) {
             expect(4)
-            q.send(1) // suspend -- the first to come to rendezvous
-            expect(7)
-            q.send(2) // does not suspend -- receiver is there
-            expect(8)
+            q.send(1) // success -- buffered
+            check(!q.isEmpty && q.isFull)
+            expect(5)
+            q.send(2) // suspends (buffer full)
+            expect(9)
         }
         expect(2)
         val receiver = launch(context) {
-            expect(5)
-            check(q.receive() == 1) // does not suspend -- sender was there
             expect(6)
-            check(q.receive() == 2) // suspends
-            expect(9)
+            check(q.receive() == 1) // does not suspend -- took from buffer
+            check(!q.isEmpty && q.isFull) // waiting sender's element moved to buffer
+            expect(7)
+            check(q.receive() == 2) // does not suspend (takes from sender)
+            expect(8)
         }
         expect(3)
         sender.join()
         receiver.join()
-        check(q.isEmpty && q.isFull)
+        check(q.isEmpty && !q.isFull)
         finish(10)
     }
 
     @Test
     fun testStress() = runBlocking {
         val n = 100_000
-        val q = RendezvousChannel<Int>()
+        val q = ArrayChannel<Int>(1)
         val sender = launch(context) {
             for (i in 1..n) q.send(i)
             expect(2)
@@ -53,30 +55,33 @@ class RendezvousChannelTest : TestBase() {
     }
 
     @Test
-    fun testClosedReceiveOrNull() = runBlocking {
-        val q = RendezvousChannel<Int>()
-        check(q.isEmpty && q.isFull && !q.isClosedForSend && !q.isClosedForReceive)
+    fun testClosedBufferedReceiveOrNull() = runBlocking {
+        val q = ArrayChannel<Int>(1)
+        check(q.isEmpty && !q.isFull && !q.isClosedForSend && !q.isClosedForReceive)
         expect(1)
         launch(context) {
-            expect(3)
+            expect(5)
+            check(!q.isEmpty && !q.isFull && q.isClosedForSend && !q.isClosedForReceive)
             assertEquals(42, q.receiveOrNull())
-            expect(4)
-            assertEquals(null, q.receiveOrNull())
             expect(6)
+            check(!q.isEmpty && !q.isFull && q.isClosedForSend && q.isClosedForReceive)
+            assertEquals(null, q.receiveOrNull())
+            expect(7)
         }
         expect(2)
-        q.send(42)
-        expect(5)
-        q.close()
-        check(!q.isEmpty && !q.isFull && q.isClosedForSend && q.isClosedForReceive)
+        q.send(42) // buffers
+        expect(3)
+        q.close() // goes on
+        expect(4)
+        check(!q.isEmpty && !q.isFull && q.isClosedForSend && !q.isClosedForReceive)
         yield()
         check(!q.isEmpty && !q.isFull && q.isClosedForSend && q.isClosedForReceive)
-        finish(7)
+        finish(8)
     }
 
     @Test
     fun testClosedExceptions() = runBlocking {
-        val q = RendezvousChannel<Int>()
+        val q = ArrayChannel<Int>(1)
         expect(1)
         launch(context) {
             expect(4)
@@ -98,29 +103,31 @@ class RendezvousChannelTest : TestBase() {
 
     @Test
     fun testOfferAndPool() = runBlocking {
-        val q = RendezvousChannel<Int>()
-        assertFalse(q.offer(1))
+        val q = ArrayChannel<Int>(1)
+        assertTrue(q.offer(1))
         expect(1)
         launch(context) {
             expect(3)
-            assertEquals(null, q.poll())
+            assertEquals(1, q.poll())
             expect(4)
-            assertEquals(2, q.receive())
-            expect(7)
             assertEquals(null, q.poll())
-            yield()
+            expect(5)
+            assertEquals(2, q.receive()) // suspends
             expect(9)
             assertEquals(3, q.poll())
             expect(10)
+            assertEquals(null, q.poll())
+            expect(11)
         }
         expect(2)
         yield()
-        expect(5)
-        assertTrue(q.offer(2))
         expect(6)
-        yield()
+        assertTrue(q.offer(2))
+        expect(7)
+        assertTrue(q.offer(3))
         expect(8)
-        q.send(3)
-        finish(11)
+        assertFalse(q.offer(4))
+        yield()
+        finish(12)
     }
 }

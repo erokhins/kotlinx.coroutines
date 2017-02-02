@@ -102,7 +102,7 @@ public interface ReceiveChannel<out E> {
      * Retrieves and removes the head of this queue, or returns `null` if this queue [isEmpty]
      * or [isClosedForReceive].
      */
-    public fun pool(): E?
+    public fun poll(): E?
 
     /**
      * Returns new iterator to receive elements from this channels using `for` loop.
